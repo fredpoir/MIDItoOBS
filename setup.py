@@ -7,11 +7,11 @@ serverIP = "localhost"
 serverPort = "4444"
 ####
 
-db = TinyDB("config.json")
+db = TinyDB("config.json", indent=4)
 buttonActions = ["SetCurrentScene", "SetPreviewScene", "TransitionToProgram", "SetCurrentTransition", "SetSourceVisibility", "ToggleSourceVisibility", "ToggleMute", "SetMute",
                  "StartStopStreaming", "StartStreaming", "StopStreaming", "StartStopRecording", "StartRecording", "StopRecording", "StartStopReplayBuffer",
                  "StartReplayBuffer", "StopReplayBuffer", "SaveReplayBuffer", "SetTransitionDuration", "SetCurrentProfile","SetCurrentSceneCollection",
-                 "ResetSceneItem", "SetTextGDIPlusText", "SetBrowserSourceURL"]
+                 "ResetSceneItem", "SetTextGDIPlusText", "SetBrowserSourceURL", "ReloadBrowserSource"]
 faderActions = ["SetVolume", "SetSyncOffset", "SetSourcePosition", "SetSourceRotation", "SetSourceScale", "SetTransitionDuration"]
 jsonArchive = {"SetCurrentScene": """{"request-type": "SetCurrentScene", "message-id" : "1", "scene-name" : "%s"}""",
                "SetPreviewScene": """{"request-type": "SetPreviewScene", "message-id" : "1","scene-name" : "%s"}""",
@@ -21,8 +21,8 @@ jsonArchive = {"SetCurrentScene": """{"request-type": "SetCurrentScene", "messag
                "StartStreaming": """{"request-type": "StartStreaming", "message-id" : "1"}""",
                "StopStreaming": """{"request-type": "StopStreaming", "message-id" : "1"}""",
                "StartStopRecording": """{"request-type": "StartStopRecording", "message-id" : "1"}""",
-               "StartRecording": """{"request-type": "StartStreaming", "message-id" : "1"}""",
-               "StopRecording": """{"request-type": "StopStreaming", "message-id" : "1"}""",              
+               "StartRecording": """{"request-type": "StartRecording", "message-id" : "1"}""",
+               "StopRecording": """{"request-type": "StopRecording", "message-id" : "1"}""",              
                "ToggleMute": """{"request-type": "ToggleMute", "message-id" : "1", "source": "%s"}""",
                "SetMute": """{"request-type": "SetMute", "message-id" : "1", "source": "%s", "mute": %s}""",
                "StartStopReplayBuffer": """{"request-type": "StartStopReplayBuffer", "message-id" : "1"}""",
@@ -41,7 +41,8 @@ jsonArchive = {"SetCurrentScene": """{"request-type": "SetCurrentScene", "messag
                "SetSourceRotation": """{"request-type": "SetSceneItemProperties", "message-id" : "1", "scene": "%s", "item": "%s", "rotation": %s}""",
                "SetSourceVisibility": """{"request-type": "SetSceneItemProperties", "message-id" : "1", "item": "%s", "visible": %s}""",
                "ToggleSourceVisibility": """{"request-type": "SetSceneItemProperties", "message-id" : "1", "item": "%s", "visible": %s}""",
-               "SetSourceScale": """{"request-type": "SetSceneItemProperties", "message-id" : "1", "scene": "%s", "item": "%s", "scale": {"%s": %s}}"""}
+               "SetSourceScale": """{"request-type": "SetSceneItemProperties", "message-id" : "1", "scene": "%s", "item": "%s", "scale": {"%s": %s}}""",
+               "ReloadBrowserSource": """{"request-type": "SetBrowserSourceProperties", "message-id" : "1", "source": "%s", "url": "%s"}"""}
 
 sceneListShort = []
 sceneListLong = []
@@ -55,9 +56,9 @@ ignore = 255
 savetime1 = time.time()
 
 def exitScript():
+    print("Exiting...")
     midiport.close()
-    print("Exiting")
-    sys.exit()
+    db.close()
 
 def midicallback(message):
     global ignore
@@ -75,6 +76,17 @@ def midicallback(message):
         if input_select in range(0, len(buttonActions)):
             action = buttonActions[input_select]
             setupButtonEvents(action, message.note, message.type)
+    elif message.type == "program_change": #button only
+        ignore = message.program
+        print("Select Action:")
+        counter = 0
+        for action in buttonActions:
+            print("%s: %s" % (counter, action))
+            counter += 1
+        input_select = int(input("Select 0-%s: " % str(len(buttonActions)-1)))
+        if input_select in range(0, len(buttonActions)):
+            action = buttonActions[input_select]
+            setupButtonEvents(action, message.program, message.type)
     elif message.type == "control_change": #button or fader
         ignore = message.control
         print("Select input type:\n0: Button\n1: Fader/Knob\n2: Ignore")
@@ -280,13 +292,13 @@ def setupButtonEvents(action, NoC, msgType):
             for line in scene["sources"]:
                 if line["name"] not in tempSceneList:
                     tempSceneList.append(line["name"])
-        source = printArraySelect(tempSceneList)
+        source = source1 = printArraySelect(tempSceneList)
         sceneListShort.append("--Current--")
         scene = printArraySelect(sceneListShort)
         if scene != "--Current--":
             source = source + '", "scene": "' + scene
         action = jsonArchive["ToggleSourceVisibility"] % (source, "%s")
-        saveTODOButtonToFile(msgType, NoC, "button" , action, "ToggleSourceVisibility", source)
+        saveTODOButtonToFile(msgType, NoC, "button" , action, "ToggleSourceVisibility", source1)
     elif action == "ToggleMute": #fertig
         updateSceneList()
         updateSpecialSources()
@@ -376,6 +388,16 @@ def setupButtonEvents(action, NoC, msgType):
         url = str(input("Input the desired URL: "))
         action = jsonArchive["SetBrowserSourceURL"] % (source, url)
         saveButtonToFile(msgType, NoC, "button" , action)
+    elif action == "ReloadBrowserSource":
+        updateSceneList()
+        tempSceneList = []
+        for scene in sceneListLong:
+            for line in scene["sources"]:
+                if line["name"] not in tempSceneList and line["type"] == "browser_source":
+                    tempSceneList.append(line["name"])
+        source = printArraySelect(tempSceneList)
+        action = jsonArchive["ReloadBrowserSource"] % (source, "%s")
+        saveTODOButtonToFile(msgType, NoC, "button" , action, "ReloadBrowserSource", source)
 
         
 def saveFaderToFile(msg_type, msgNoC, input_type, action, scale, cmd):
@@ -518,6 +540,10 @@ def mainLoop():
                     if msg.note != ignore:
                         midicallback(msg)
                         savetime1 = time.time()
+                if msg.type == "program_change":
+                    if msg.program != ignore:
+                        midicallback(msg)
+                        savetime1 = time.time()
                 if msg.type == "control_change":
                     if msg.control != ignore:
                         midicallback(msg)
@@ -542,10 +568,9 @@ if __name__ == "__main__":
     input_select = int(input("Select 0-%s: " % str(len(deviceList)-1)))
     if input_select in range(0, len(deviceList)):
         print("You selected: %s (%s)" % (str(input_select), deviceList[input_select]))
-        Search = Query()
-        result = db.search(Search.value == deviceList[input_select])
+        result = db.search(Query().value == deviceList[input_select])
         if result:
-                db.remove(Search.type == "device")
+                db.remove(Query().type == "device")
                 db.insert({"type" : "device", "value": deviceList[input_select]})
         else:
                 db.insert({"type" : "device", "value": deviceList[input_select]})
